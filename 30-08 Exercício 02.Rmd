@@ -1,0 +1,406 @@
+---
+title: "Exercício 02.24-08"
+output: 
+  html_document:
+    df_print: paged
+date: '2022-08-24'
+---
+
+# Exercícios 02 
+
+[Aula 02](https://fmeireles.com/materiais/exercicios/exercicios2.html)
+
+```{r}
+library("tidyverse")
+library("tidylog")
+library("rmarkdown")
+#install.packages("broom")
+library(broom)
+```
+
+# 1) Modelos
+
+Carregar os dados:
+```{r}
+link <- "https://raw.githubusercontent.com/jacobwright32/Web_Scraper_AI_Core_Project/bb4865ae568e23ab8fadb6ea58cf117df2164ef3/web%20scraping/Cleaned%20Data/Brazil_Sao%20Bernardo%20Do%20Campo_Cleaned.csv"
+dados <- readr::read_csv(link)
+View(dados)
+```
+
+## a) Gráfico
+
+Analise a relação entre entre cobertura de nuvens **(cloud_coverage)** e temperatura máxima **(maximum_temperature)**. Para isso, plote gráficos com a relação bivariada, use coeficiente de correlação ou um modelo linear (OLS). Descreva os resultados que encontrar.
+```{r}
+dados<- dados %>% rename(maximum_temperature = maximum_temprature)
+```
+### Teste de Correlação 
+
+        . é importante chamar sempre quais dados nós estamos usando (dados %>% ou attach(dados))
+        . crtl + shift+ m -> %>% 
+        . cor.test = corr() no stata + os dados colocamos um . porque vamos usar todos os que estão descritos nas obs
+```{r}
+dados %>% 
+    cor.test(~ maximum_temperature + cloud_coverage, data=.) %>%
+   tidy()
+
+```
+
+```{r}
+dados %>% 
+  ggplot() +
+  geom_point(aes(x=maximum_temperature, y=cloud_coverage), color=2)+
+  geom_smooth(aes(x = maximum_temperature, y = cloud_coverage), method = "lm", se = FALSE, color=1)
+
+```
+
+
+Há uma relação de -0.6022757 (negativo) e um p-valor de zero (tem significância estatística). 
+
+Interpretando: há uma correlação negativa e estatisticamente significativa entre a quantidade de nuvens e as temperaturas máximas. 
+
+
+        COMENTÁRIOS: Quando buscamos avaliar a relação entre duas variáveis da mesma população ou amostra, podemos qualificar essa análise bivariada. 
+
+
+## b) Exploração
+
+Existe alguma outra variável na base com maior correção com a temperatura máxima? Novamente, registre os resultados que encontrar.
+
+```{r}
+
+dados %>% 
+  select_if(is.numeric) %>% 
+names()
+
+```
+TEMP MAX vs. TEMP MIN (0.6938857	)
+```{r}
+dados %>%   
+    cor.test(~ maximum_temperature + minimum_temprature, data=.) %>%
+   tidy()
+```
+
+TEMP MAX vs. VENTO (-0.3471838)
+```{r}
+dados %>%   
+    cor.test(~ maximum_temperature + wind_speed, data=.) %>%
+   tidy()
+```
+
+TEMP MAX vs. CHUVA (-0.06680868)
+```{r}
+dados %>%   
+    cor.test(~ maximum_temperature + amount_of_rain, data=.) %>%
+   tidy()
+```
+
+TEMP MAX vs. HUMIDADE (-0.6025005)
+```{r}
+dados %>%   
+    cor.test(~ maximum_temperature + humidity, data=.) %>%
+   tidy()
+```
+
+
+TEMP MAX vs. NUVENS (-0.6022757	)
+```{r}
+dados %>%   
+    cor.test(~ maximum_temperature + cloud_coverage, data=.) %>%
+   tidy()
+```
+
+
+TEMP MAX vs. PRESSAO  (-0.48552)
+```{r}
+dados %>%   
+    cor.test(~ maximum_temperature + pressure, data=.) %>%
+   tidy()
+```
+
+
+```{r}
+variavel<- c("minimum_temprature" ,  "wind_speed"   ,       "amount_of_rain"   ,"humidity"  ,          "cloud_coverage","pressure")
+valores<-c(0.6938857, -0.3471838, -0.06680868, -0.6025005,-0.6022757,-0.48552)
+correlacao <- tibble(Variavel = variavel, Valor_da_correlacao = valores)
+View(correlacao)
+```
+
+
+## c) Exportação
+
+Crie um código que faça um gráfico da relação bivariada entre todas as variáveis contínuas na base e os salve em disco.
+
+        O comando select_if(is.numeric) separa as var que eu quero (no caso numericas)
+        2. pivot_longer: melted (pesquisar direito oq isso faz depois)
+        + dá, ainda, para acrescentar fórmulas se quisermos e fazer essa análise linear não ser mais linear e seguir a fórmula que for mencionada
+
+```{r}
+grafico_atividade1 <- dados %>% 
+  select_if(is.numeric) %>% 
+  pivot_longer(-maximum_temperature) %>% 
+  ggplot(aes(x=maximum_temperature, y = value)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=FALSE) +
+  facet_wrap(~ name, scales = "free")
+```
+
+        help stata -> ?(nome da função que eu quero pesquisar)
+        . é possível mudar a fórmula usada no gráfico com esse comando especificando a fórmula (como descrito abaixo)
+        
+Para salvar a imagem 
+```{r}
+dados %>% 
+  select_if(is.numeric) %>% 
+  pivot_longer(-maximum_temperature) %>% 
+  ggplot(aes(x=maximum_temperature, y = value)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=FALSE,
+              formula = y ~ x +I(x^2))+
+  facet_wrap(~ name, scales = "free")
+
+ggsave(plot = grafico_atividade1, file = paste0("grafico_atividade1.png"))
+```
+## d) Modelo
+
+Rode modelos lineares simples (por mínimos quadrados ordinários) para predizer a temperatura máxima diária em São Bernardo do Campo (SP). Use as variáveis que quiser, faça transformações nelas se necessário, e reporte alguns resultados do melhor modelo que encontrar.
+
+        . db$variavel <- vai prever o trem com essa função e salvar a variável que predizeremos dentro do banco dados
+        . nesse ex. dados$predicao (dados é o nome do trem e predição da nova variável que criamos) essa var será igual à predição do modelo (que foi criado acima)
+
+```{r}
+modelo <- lm(maximum_temperature ~humidity + wind_speed, data= dados)
+dados$predicao <- predict(modelo)
+```
+
+Fazendo essa mesma predição com as variáveis que tem maior correção com a temperatura máxima
+
+* humidade e temperatura mínima
+
+```{r}
+modelo1 <- lm(maximum_temperature ~humidity + minimum_temprature, data= dados)
+dados$predicao1 <- predict(modelo1)
+```
+
+## e) Comparação
+
+Salve as predições do seu modelo treinado no exercício anterior e compare com os valores reais de temperatura máxima (vale usar gráficos).
+
+```{r}
+dados %>% 
+  filter(date>as.Date("2020-01-01")) %>%
+  select(date, maximum_temperature, predicao) %>% 
+  pivot_longer(-date) %>% 
+  ggplot(aes(x =date, y =value , color =name)) +
+  geom_line()
+```
+
+Outras formas de fazer
+
+```{r}
+dados %>%
+  arrange(maximum_temperature) %>%
+  mutate(id = 1:n()) %>%
+ # filter(date > as.Date("2020-01-01")) %>%
+  select(id, maximum_temperature, predicao) %>% 
+  pivot_longer(-id) %>% 
+  ggplot(aes(x = id, y = value , color = name)) +
+  geom_line()
+```
+```{r}
+dados %>%
+  arrange(maximum_temperature) %>%
+  mutate(id = 1:n()) %>%
+ # filter(date > as.Date("2020-01-01")) %>%
+  select(id, maximum_temperature, predicao) %>% 
+  pivot_longer(-id) %>%
+  mutate(name =fct_relevel(name, "predicao")) %>% 
+  ggplot(aes(x = id, y = value , color = name)) +
+  geom_line()
+```
+
+Fazendo essa mesma predição com as variáveis que tem maior correção com a temperatura máxima
+```{r}
+modelo1 <- lm(maximum_temperature ~humidity + minimum_temprature, data= dados)
+dados$predicao1 <- predict(modelo1)
+
+dados %>% 
+  filter(date>as.Date("2020-01-01")) %>%
+  select(date, maximum_temperature, predicao1) %>% 
+  pivot_longer(-date) %>% 
+  ggplot(aes(x =date, y =value , color =name)) +
+  geom_line()
+```
+
+```{r}
+dados %>%
+  arrange(maximum_temperature) %>%
+  mutate(id = 1:n()) %>%
+ # filter(date > as.Date("2020-01-01")) %>%
+  select(id, maximum_temperature, predicao1) %>% 
+  pivot_longer(-id) %>%
+  mutate(name =fct_relevel(name, "predicao1")) %>% 
+  ggplot(aes(x = id, y = value , color = name)) +
+  geom_line()
+```
+
+
+# 2) Sorteios
+
+## a) Umidade
+
+Crie uma função (ou um código) para sortear 1000 observações do banco de dados climáticos, calcular a média de umidade (humidity).
+
+
+        Usamos uma funcao (function) para criar uma função
+        . nova_funcao <- function(){o codigo da função vem SEMPRE dentro dessas chaves}
+        codigo que pegue a base+sorteie 1000 obs e calcule a média de humidity
+        dentro do pacote dplyr tem uma função para sortear esses trem (sample)
+        . nomedopacote:: e escreve oq vc quer procurar ()
+
+* tem duas formas:
+
+  * FORMA 01: do tidyverse -> dentro do comando sample_n(eu ponho o numero que eu quero que ele faça -> randomly)
+  
+```{r}
+nova_funcao <- function(){
+  
+    dados %>%
+    sample_n(1000)
+}
+```
+
+        pluck -> vai pegar essa var e transforma-la em um vetor
+        o desafio é pegar essa função e fazer ela rodar e salvar os valores 1000 vezes
+        
+```{r}
+nova_funcao0 <- function(){
+  
+    dados %>%
+    sample_n(1000) %>% 
+    summarise(humidity =mean(humidity)) %>%
+    pluck("humidity")
+}
+
+nova_funcao0()
+```
+  * FORMA 02:do R base
+
+```{r}
+nova_funcao1 <- function(){
+    sample(dados$humidity, 1000) %>% 
+    mean()
+}
+nova_funcao1()
+```
+
+        Como fazer a função rodar 1000x?
+        
+```{r}
+for (i in 1:10) print(i)
+
+#fazer um para rodar mil vezes parece uma boa ideia
+
+for (i in 1:1000){ print(nova_funcao1())}
+
+#ok, mas tem que gardar esses valores
+
+simulacao<- numeric(1000)
+for (i in 1:1000){ 
+  print(nova_funcao1())}
+
+```
+
+tem que fazer um histograma e questão resolvida
+
+## b) Histograma
+
+Com a função criada anteriormente, calcule 1000 médias de amostras de humidity e plote a distribuição como um histograma.
+
+
+        repetir a função
+        map_dbl (retorna um resultado numerico)
+
+
+```{r}
+mil_numeros <- 1:1000 %>% 
+  map_dbl(~ nova_funcao1())
+
+as.data.frame(mil_numeros) %>%
+  ggplot()+geom_histogram(aes(mil_numeros))
+```
+
+## c) Modelos lineares
+
+Modifique a função criada anteriormente para, depois de sortear 1000 observações do banco, rodar um modelo de regressão linear para predizer valores de humidity e extrair o r2 do modelo. Dica:
+
+```{r}
+xx<- function(){
+x<-dados %>%
+  sample_n(1000) %>%
+  lm(humidity ~ wind_speed + maximum_temperature, 
+     data = .) %>% 
+  summary()
+}
+
+```
+        
+        modelo de regressao o comando é lm 
+        quando eu chamo o banco de dados eu coloco data = .
+        colocando x<- antes de (dados) eu salvo tudo isso como x
+
+
+para acessar isso do jeito tidyverse
+
+```{r}
+xx1<- function(){
+dados %>%
+  sample_n(1000) %>%
+  lm(humidity ~ wind_speed + maximum_temperature, 
+     data = .) %>% 
+    summary() %>% 
+  pluck("r.squared")
+}
+
+xx1()
+```
+
+[link](http://www.leg.ufpr.br/planexp/planexp/node1.html)
+```{r}
+w <- 1 + sqrt(mil_numeros)/2
+dummy <- data.frame(mil_numeros=mil_numeros, y= mil_numeros + rnorm(mil_numeros)*w)
+dummy
+
+fm <- lm(y ~ mil_numeros, data=dummy)
+summary(fm)$r.squared
+
+fm1 <- lm(y ~ mil_numeros, data=dummy, weight=1/w^2)
+summary(fm1)
+
+attach(dummy)
+lrf <- lowess(mil_numeros, y)
+plot(mil_numeros, y) + abline(coef(fm1), col = "red")
+
+
+plot(fitted(fm), resid(fm),
+     xlab="Fitted values", ylab="Residuals",
+     main="Residuals vs Fitted")
+
+qqnorm(resid(fm), main="Residuals Rankit Plot")
+
+
+```
+
+
+
+# 3) Frameworks 
+
+Ainda usando a base carregada anteriormente, use um framework para estimar um modelo de regressão tendo humidity como target. Dicas: siga os tutoriais do mlr3, para R, ou do sci-kit learn, para Python. Não se preocupe em usar os frameworks perfeitamente, o importante é ganhar familiaridade com eles.
+
+
+
+
+
+
+
+
+
