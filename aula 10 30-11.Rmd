@@ -1,0 +1,210 @@
+---
+title: "Aula 10"
+output: html_document
+date: "2022-11-30"
+---
+
+[Aula 10](https://fmeireles.com/materiais/materiais/aula10.html)
+
+
+
+```{r}
+# Pacotes necessários:
+install.packages("pacman")
+
+pacman::p_load("tidyverse",  "dplyr", "datasets", "ggplot2", "readxl", "haven", "knitr", "reshape2", "broom", "modelr", "stargazer", "jtools", "purrr", "mlr3", "mlr3measures", "mlr3viz", "mlr3learners", "mlr3extralearners", "mlr3tuning", "GGally", "kknn", "glmnet", "quanteda", "janitor", "ranger", "mlr3verse", "igraph", "earth", "rpart", "tolls", "devtools","randomForest", "xgboost", "gbm",'kernlab', 'mlr3cluster', 'factoextra', 'dbscan')
+
+install.packages(c("mlr3mbo", "DiceKriging"))
+library("mlr3mbo")
+library("DiceKriging")
+install.packages("future")
+library("future")
+library("mlr3misc")
+install.packages("encode.smote.classif.xgboost")
+```
+
+
+Iterações	`trm("evals", n_evals = 10)`
+Tempo `trm("run_time", secs = 100)	`
+Performance	`trm("perf_reached", level = 0)`	
+Estagnação	`trm("stagnation", iters = 10, threshold = 0.01)`
+
+usando features: workers indica o número de threads a serem usadas
+`future::plan("multisession", workers = 4)`
+
+# Exercício 10
+
+[Ex. 10](https://fmeireles.com/materiais/exercicios/exercicios10.html)
+
+## 1) Tuning
+
+        Nosso target é a variável `winner`, que indica se uma dada petição foi vitoriosa no plenário
+        Teste outras métricas de validação (note que há o dobro de decisões positivas na base)
+        Pense na melhor estratégia de validação a usar (o estudo original usa 10-fold cross validation) e justifique sua escolha (em comentários no código)
+        Analise as variáveis na base e veja se não é possível pré-processar (ou mesmo remover) algumas que talvez sejam problemáticas
+        Teste diferentes pipelines, com diferentes modelos e hiper-parâmetros
+        
+```{r}
+link <- "https://github.com/FLS-6497/datasets/raw/main/aula10/supreme.csv"
+dados <- readr::read_csv2(link) %>%
+  mutate_if(is.character, as.factor) %>% 
+  mutate_at(c("jurisdiction", "certReason", "issueArea"), as.factor)
+```
+```{r}
+table(dados$jurisdiction) %>% barplot()
+```
+
+
+
+```{r}
+tsk <- as_task_classif(winner ~ ., data = dados, positive = "1")
+
+# Cria uma pipeline (e indica parametros para tuning)
+gr <- po("encode") %>>% 
+      po("learner", learner = lrn("classif.randomForest"),
+         ntree = to_tune(c(20, 50, 100)),
+         mtry = to_tune(c(3, 7, 11))) %>% #número de variáveis para se levar em consideração (essa escolha é aleatória)
+  as_learner()
+
+#escrever outro parametros
+#Como eu já sei quais algorítimos eu quero usar, eu não uso mais benchmarks e sim ti(....), eu quero ver quais hiperparâmetros são mais interessantes para potencializar os meus resultados
+
+#to_tune é o que vai permitir que eu use mais de um parâmetro por vez
+# Criamos uma instancia (parecido com um design grid)
+
+instance <- ti(
+  task = tsk,
+  learner = gr,
+  resampling = rsmp("cv", folds = 5),
+  measures = msr("classif.precision"),
+  terminator = trm("none")
+)
+
+# Tuning
+tuner <- tnr("grid_search") #primeira estratégia para testar os tunings. Aqui ele vai testar cada uma das 6 combinações usando cross validation
+tuner$optimize(instance)
+
+# Os resultados ficam salvos em um tibble
+as.data.table(instance$archive) %>%
+  as_tibble()
+
+# Retreina a melhor pipeline na base completa
+gr$param_set$values <- instance$result_learner_param_vals #o lr3 salva os valores aqui e depois nos usamos eles
+gr$train(tsk)
+
+```
+
+por padrão o cv é usado com k=5, mas no geral é bom usar o repeated cross validation e um k maior do que 5
+por exemplo, se colocarmos, k=10 e repetirmos 3x, vamos rodar 30 cada modelo. 
+
+```{r}
+# Criamos uma instancia
+gr1 <- lts(lrn("classif.kknn", predict_type = "prob"))
+
+instance <- ti(
+  task = tsk,
+  learner = gr1,
+  resampling = rsmp("repeated_cv", folds = 5),
+  measures = msrs(c("classif.fbeta","classif.acc","classif.prauc", "classif.auc")),
+  terminator = trm("evals", n_evals = 10)
+)
+
+# Tuning
+tuner <- tnr("mbo")
+tuner$optimize(instance)
+```
+
+[Tuning Spaces](https://mlr-org.com/tuning_spaces.html)
+`lts` importa os parâmetros razoáveis de cada um dos classificadores para se testar que estão contidos nesse site acima
+
+```{r}
+# Criamos uma instancia
+boost <- lts(lrn("classif.xgboost", predict_type = "prob"))
+
+gr2<- po("encode") %>>% 
+  boost %>%
+  as_learner()
+
+instance <- ti(
+  task = tsk,
+  learner = gr2,
+  resampling = rsmp("repeated_cv", folds = 10, repeats=5),
+  measures = msrs(c("classif.fbeta","classif.acc","classif.prauc", "classif.auc")),
+  terminator = trm("evals", n_evals = 10)
+)
+
+# Tuning
+tuner <- tnr("mbo")
+tuner$optimize(instance)
+```
+
+```{r}
+tsk <- as_task_classif(winner ~., data=dados)
+
+boost <- lts(lrn("classif.xgboost"))# lógica muito propensa a overfiting, então tenho que tomar muito cuidado comtunning e a estratégia de validação a ser usada
+
+gr2 <- po("encode") %>>%
+  #po("smote") %>>% 
+  boost %>%
+  as_learner()
+
+gr2 
+
+instance <- ti(
+  task = tsk,
+  learner = gr2,
+  resampling = rsmp("repeated_cv", folds = 10, repeats=2),
+  measures = msr("classif.acc"),
+  terminator = trm("evals", n_evals = 3) #temos que dar a chance do tuning usar o melhor numero de configurações possíveis . Quanto maior for esse núemro aqui maior vai ser o numero de testes
+)
+
+# Tuning
+tuner <- tnr("random_search")
+tuner$optimize(instance)
+
+
+as.data.table(instance$archive) %>% 
+  as_tibble() %>% 
+View()
+
+table(dados$winner) %>% barplot() # pra tentar ajustar podemos rodar com smoting po("SMOTE) -> vai pegar uma obs que existe e coloco um ruido nela, vai manter a tendencia e aumentar o numero de observações
+```
+
+`lts` vai testar os hiperparâmetros que estão em default do link (site do mlr3 que fala sobre cada um desses classificadores)
+
+## 2) Tuning com text as data
+
+```{r}
+link <- "https://github.com/FLS-6497/datasets/blob/main/projeto1/discursos_pres_internacionais.csv?raw=true"
+discursos <- readr::read_csv2(link)
+```
+
+tuning pra texto -> pré processamento (é mais o que entra de inputing no modelo, do que o modelo em si)
+
+```{r}
+tsk <- as_task_classif(presidente ~discurso, data= discursos)
+
+ranger <- lts(lrn("classif.ranger"))
+
+gr3<- po("textvectorizer") %>>%
+  #po("smote") %>>% 
+  ranger %>% 
+  as_learner()
+  
+instance <- ti(
+  task = tsk,
+  learner = gr3,
+  resampling = rsmp("repeated_cv", folds = 10, repeats=2),
+  measures = msr("classif.acc"),
+  terminator = trm("evals", n_evals = 3) 
+)
+
+tuner <- tnr("random_search")
+tuner$optimize(instance)
+
+
+as.data.table(instance$archive) %>% 
+  as_tibble() %>% 
+View()
+```
+
